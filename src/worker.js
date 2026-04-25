@@ -21,7 +21,9 @@ export default {
         const data = await r.json();
         const usd = data.find(x => x.Ccy === "USD");
         if (usd) usdRate = parseFloat(usd.Rate);
-      } catch (e) {}
+      } catch (e) {
+        console.log("CBU kursini olishda xatolik, fallback ishlatildi");
+      }
 
       const prompt = `
 Sen O'zbekiston tadbirkorlari uchun professional biznes maslahatchi AI.
@@ -49,7 +51,10 @@ Vazifa:
 - moliyaviy prognoz
 - kredit kerak yoki yo'q
 
-Faqat JSON qaytar:
+FAQAT VALID JSON qaytar.
+Hech qanday izoh, markdown, \`\`\`json, qo'shimcha matn yozma.
+
+Schema:
 {
   "score": 0,
   "verdict": "",
@@ -100,26 +105,64 @@ Faqat JSON qaytar:
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: {
-              temperature: 0.5,
-              maxOutputTokens: 3500
+              temperature: 0.3,
+              maxOutputTokens: 3500,
+              responseMimeType: "application/json"
             }
           })
         }
       );
 
       const apiData = await apiRes.json();
-      let text = apiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-      text = text.replace(/```json/g, "").replace(/```/g, "").trim();
 
-      let parsed;
-      try {
-        parsed = JSON.parse(text);
-      } catch (e) {
+      if (!apiRes.ok) {
         return new Response(JSON.stringify({
           error: true,
-          message: "AI javobini parse qilib bo'lmadi",
-          raw: text
-        }), { headers: cors() });
+          message: "Gemini API xatolik qaytardi",
+          details: apiData
+        }), {
+          status: 500,
+          headers: cors()
+        });
+      }
+
+      let text = apiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+      if (!text) {
+        return new Response(JSON.stringify({
+          error: true,
+          message: "AI bo'sh javob qaytardi",
+          details: apiData
+        }), {
+          status: 500,
+          headers: cors()
+        });
+      }
+
+      text = text
+        .replace(/```json/gi, "")
+        .replace(/```/g, "")
+        .trim();
+
+      let parsed;
+
+      try {
+        parsed = JSON.parse(text);
+      } catch (e1) {
+        try {
+          const match = text.match(/\{[\s\S]*\}/);
+          if (!match) throw new Error("JSON topilmadi");
+          parsed = JSON.parse(match[0]);
+        } catch (e2) {
+          return new Response(JSON.stringify({
+            error: true,
+            message: "AI javobini parse qilib bo'lmadi",
+            raw: text
+          }), {
+            status: 500,
+            headers: cors()
+          });
+        }
       }
 
       parsed.usd_rate = usdRate;
