@@ -4,11 +4,10 @@ export default {
       return new Response(null, { headers: cors() });
     }
 
-    // Browserda ochib test qilish uchun
     if (request.method === "GET") {
       return new Response(JSON.stringify({
         ok: true,
-        message: "BiznesAI Worker ishlayapti",
+        message: "BiznesAI Worker ishlayapti (Groq)",
         has_key: !!env.GEMINI_API_KEY,
         date: new Date().toISOString().slice(0, 10)
       }, null, 2), {
@@ -43,22 +42,16 @@ export default {
         const data = await r.json();
         const usd = data.find(x => x.Ccy === "USD");
         if (usd) usdRate = parseFloat(usd.Rate);
-      } catch (e) {
-        console.log("CBU kursini olishda xatolik, fallback ishlatildi");
-      }
+      } catch (e) {}
 
       const prompt = `
 Sen O'zbekiston tadbirkorlari uchun professional biznes maslahatchi AIsan.
-
-SENING VAZIFANG:
-Foydalanuvchi biznes g'oyasini yuboradi. Sen uni O'zbekiston bozori uchun real va professional tarzda tahlil qilasan.
 
 KONTEKST:
 - Yil: ${YEAR}
 - Sana: ${TODAY}
 - Dollar kursi: ${usdRate} so'm
 - Mamlakat: O'zbekiston
-- Tahlil uslubi: professional, realistik, tadbirkor uchun foydali
 - Barcha moliyaviy raqamlar: million so'mda
 
 FOYDALANUVCHI MA'LUMOTLARI:
@@ -67,34 +60,22 @@ FOYDALANUVCHI MA'LUMOTLARI:
 - G'oya tavsifi: ${desc}
 - Boshlang'ich kapital: ${capital} mln so'm
 
-TAHLIL QIL:
-1. Umumiy baho (0-100)
-2. Bozor talabi
-3. Raqobat darajasi
-4. Foyda imkoniyati
-5. Risk darajasi
-6. AI ning 3-4 gaplik chuqur xulosasi
-7. G'oya uchun kerak bo'ladigan taxminiy jamoa
-8. Kuchli tomonlar
-9. Zaif tomonlar
-10. Risklar
-11. Imkoniyatlar
-12. 5 qadamli yo'l xaritasi
-13. Moliyaviy prognoz
-14. Kredit kerakmi-yo'qmi
-15. Davlat qo'llab-quvvatlash imkoniyatlari
-16. Juda qisqa yakuniy xulosa
+VAZIFA:
+1. Umumiy baho ber
+2. Bozor talabi, raqobat, foyda, riskni bahola
+3. Kerakli jamoani taxmin qil
+4. Moliyaviy prognoz tuz
+5. Kuchli tomonlar, zaif tomonlar, risklar, imkoniyatlarni yoz
+6. 5 qadamli tavsiyalar ber
+7. Kredit kerak bo'lsa tavsiya qil
+8. Davlat qo'llab-quvvatlash imkoniyatlarini yoz
+9. Juda qisqa summary yoz
 
-MUHIM:
-- Faqat VALID JSON qaytar
-- Hech qanday izoh yozma
-- Hech qanday markdown yozma
-- Hech qanday \`\`\`json yozma
-- Financial maydonlarida raqamlar bo'lsin
-- estimated_staff matn bo'lsin
-- gov_support massiv bo'lsin
+FAQAT toza JSON qaytar.
+Hech qanday markdown yozma.
+Hech qanday izoh yozma.
 
-JSON SCHEMA:
+Schema:
 {
   "score": 0,
   "verdict": "",
@@ -137,58 +118,56 @@ JSON SCHEMA:
 }
 `;
 
-      const apiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${env.GEMINI_API_KEY}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: prompt }]
-              }
-            ],
-            generationConfig: {
-              temperature: 0.4,
-              maxOutputTokens: 3500,
-              responseMimeType: "application/json"
+      const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${env.GEMINI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "llama3-70b-8192",
+          temperature: 0.3,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: "Sen faqat valid JSON qaytaradigan biznes tahlilchi AIsan."
+            },
+            {
+              role: "user",
+              content: prompt
             }
-          })
-        }
-      );
+          ]
+        })
+      });
 
-      const apiData = await apiRes.json();
+      const groqData = await groqRes.json();
 
-      if (!apiRes.ok) {
+      if (!groqRes.ok) {
         return new Response(JSON.stringify({
           error: true,
-          message: apiData?.error?.message || "Gemini API xatolik qaytardi",
-          details: apiData
+          message: groqData?.error?.message || "Groq API xatolik qaytardi",
+          details: groqData
         }), {
           status: 500,
           headers: cors()
         });
       }
 
-      let text = apiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      let text = groqData?.choices?.[0]?.message?.content || "";
 
       if (!text) {
         return new Response(JSON.stringify({
           error: true,
           message: "AI bo'sh javob qaytardi",
-          details: apiData
+          details: groqData
         }), {
           status: 500,
           headers: cors()
         });
       }
 
-      text = text
-        .replace(/```json/gi, "")
-        .replace(/```/g, "")
-        .trim();
+      text = text.replace(/```json/gi, "").replace(/```/g, "").trim();
 
       let parsed;
 
